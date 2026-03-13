@@ -1653,17 +1653,52 @@
         style="border:none; background:none; cursor:pointer; color:var(--text3); font-size:1.2rem;">&times;</button>
     </div>
     <div style="font-size: 0.85rem; line-height: 1.5; color: var(--text2);">
+
       <p style="margin-bottom: 8px;">รูปแบบที่รองรับในการสแกน:</p>
       <ul style="padding-left:18px; margin:0 0 10px 0;">
         <li><code>barcode</code> เช่น <strong>8852673000311</strong></li>
         <li><code>barcode,qty</code> เช่น <strong>8852673000311,50</strong></li>
         <li><code>location,barcode,qty</code> เช่น <strong>H11,8852673000311,50</strong></li>
       </ul>
+
       <p style="margin-bottom: 6px;">คำแนะนำ:</p>
-      <ul style="padding-left:18px; margin:0;">
+      <ul style="padding-left:18px; margin:0 0 14px 0;">
         <li>กด Enter ทุกครั้งหลังสแกน 1 บรรทัด</li>
-        <li>ตรวจสอบให้ใส่ชื่อ <strong>Scanned By</strong> เมื่อยืนยันสินค้า และ <strong>Auditor</strong> เมื่อต้องการยืนยันจำนวน </li>
+        <li>ตรวจสอบให้ใส่ชื่อ <strong>Scanned By</strong> เมื่อยืนยันสินค้า และ <strong>Auditor</strong> เมื่อต้องการยืนยันจำนวน</li>
       </ul>
+
+      <!-- Unknown section -->
+      <div style="background:#fff8f0; border:1px solid #f5c97a; border-radius:8px; padding:12px 14px;">
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+          <span style="font-size:1rem;">❓</span>
+          <strong style="color:#b85c00; font-size:0.85rem;">สถานะ Unknown คืออะไร?</strong>
+        </div>
+        <p style="margin:0 0 8px 0; color:var(--text);">
+          เมื่อสแกน Barcode แล้วขึ้น <strong>Unknown</strong> หมายความว่าระบบ <strong>ไม่พบ SKU</strong> ที่ตรงกันในไฟล์ที่อัปโหลด โดยมีสาเหตุได้ 3 กรณี:
+        </p>
+        <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">
+          <div style="background:#fff; border:1px solid #fde8c8; border-radius:6px; padding:8px 10px;">
+            <span style="color:#b85c00; font-weight:700;">① SKU ถูกลบออกจาก R01.102</span><br>
+            <span style="color:var(--text2); font-size:0.8rem;">Barcode ยังอยู่ใน R05.106 แต่ไม่พบ SKU คู่กันใน R01 — ระบบ join ไม่ติด</span>
+          </div>
+          <div style="background:#fff; border:1px solid #fde8c8; border-radius:6px; padding:8px 10px;">
+            <span style="color:#b85c00; font-weight:700;">② SKU เปลี่ยนรหัสใน R01.102</span><br>
+            <span style="color:var(--text2); font-size:0.8rem;">R05.106 ยังใช้รหัส SKU เก่า ทำให้ col E ใน 2 ไฟล์ไม่ตรงกัน</span>
+          </div>
+          <div style="background:#fff; border:1px solid #fde8c8; border-radius:6px; padding:8px 10px;">
+            <span style="color:#b85c00; font-weight:700;">③ Barcode ไม่มีในระบบเลย</span><br>
+            <span style="color:var(--text2); font-size:0.8rem;">สินค้าใหม่หรือสินค้านอกระบบที่ยังไม่ได้ลงทะเบียนใน R05.106</span>
+          </div>
+        </div>
+        <div style="background:#fef3e2; border-radius:6px; padding:8px 10px; display:flex; gap:8px; align-items:flex-start;">
+          <span style="font-size:0.9rem; margin-top:1px;">💡</span>
+          <span style="color:#7a4400; font-size:0.8rem;">
+            สินค้า Unknown จะถูกนับแยกและแสดงใน <strong>Not in System</strong> — ไม่สามารถเปรียบเทียบกับ System Qty ได้<br>
+            แนะนำให้ตรวจสอบไฟล์ R01.102 และ R05.106 ว่า col E (SKU) ตรงกันหรือไม่
+          </span>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -1765,20 +1800,34 @@
       if (!file) return;
       parseFile(file, (rows) => {
         state.r01Data = [];
+        let skipped = 0;
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
           if (!row || row.length === 0) continue;
-          const colE = (row[4] || '').toString().trim();
-          const colF = (row[5] || '').toString().trim();
-          const colG = parseFloat((row[6] || '0').toString().replace(/,/g, '')) || 0;
-          if (colE) {
-            state.r01Data.push({ colE, productName: colF, systemQty: colG });
-          }
+
+          // Schema R01.102:
+          //   col E (index 4) = NUMBER  → SKU (numeric id)
+          //   col F (index 5) = STRING  → Product name (alphanumeric/text)
+          //   col G (index 6) = NUMBER  → System quantity
+
+          // col E: force STRING representation of numeric id (trim, no conversion loss)
+          const rawE = (row[4] === undefined || row[4] === null) ? '' : String(row[4]).trim();
+          // col F: always treat as plain string
+          const colF = (row[5] === undefined || row[5] === null) ? '' : String(row[5]).trim();
+          // col G: strict numeric parse — strip commas/spaces, must be a finite number
+          const rawG = (row[6] === undefined || row[6] === null) ? '' : String(row[6]).replace(/,|\s/g, '').trim();
+          const colG = rawG === '' ? 0 : (isFinite(Number(rawG)) ? Number(rawG) : 0);
+
+          if (!rawE) { skipped++; continue; }
+          state.r01Data.push({ colE: rawE, productName: colF, systemQty: colG });
         }
-        document.getElementById('badgeR01').textContent = state.r01Data.length + ' rows';
+        document.getElementById('badgeR01').textContent = 'Ready';
         document.getElementById('btnR01').classList.add('loaded');
         rebuildMaps();
-        toast(`โหลด R01.102 สำเร็จ: ${state.r01Data.length} รายการ`, 'success');
+        const msg = skipped > 0
+          ? `โหลด R01.102 สำเร็จ: ${state.r01Data.length} รายการ (ข้าม ${skipped} แถวที่ col E ว่าง)`
+          : `โหลด R01.102 สำเร็จ: ${state.r01Data.length} รายการ`;
+        toast(msg, 'success');
         saveSession();
       });
     }
@@ -1788,21 +1837,37 @@
       if (!file) return;
       parseFile(file, (rows) => {
         state.r05Data = [];
+        let skipped = 0;
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
           if (!row || row.length === 0) continue;
-          const barcode = (row[0] || '').toString().trim();
-          const colE = (row[4] || '').toString().trim();
-          const colG = (row[6] || '').toString().trim();
-          const colH = parseFloat((row[7] || '1').toString().replace(/,/g, '')) || 1;
-          if (barcode && colE) {
-            state.r05Data.push({ barcode, colE, unitName: colG, unitMultiplier: colH });
-          }
+
+          // Schema R05.106:
+          //   col A (index 0) = NUMBER  → Barcode (numeric barcode value)
+          //   col E (index 4) = NUMBER  → SKU (numeric id)
+          //   col G (index 6) = STRING  → Unit name (text)
+          //   col H (index 7) = NUMBER  → Unit multiplier
+
+          // col A (barcode): numeric but keep as string to preserve leading zeros
+          const rawA = (row[0] === undefined || row[0] === null) ? '' : String(row[0]).trim();
+          // col E (SKU): numeric id — keep as string representation
+          const rawE = (row[4] === undefined || row[4] === null) ? '' : String(row[4]).trim();
+          // col G: always plain string (unit name)
+          const colG = (row[6] === undefined || row[6] === null) ? '' : String(row[6]).trim();
+          // col H: strict numeric parse — unit multiplier, default 1
+          const rawH = (row[7] === undefined || row[7] === null) ? '' : String(row[7]).replace(/,|\s/g, '').trim();
+          const colH = rawH === '' ? 1 : (isFinite(Number(rawH)) && Number(rawH) > 0 ? Number(rawH) : 1);
+
+          if (!rawA || !rawE) { skipped++; continue; }
+          state.r05Data.push({ barcode: rawA, colE: rawE, unitName: colG, unitMultiplier: colH });
         }
-        document.getElementById('badgeR05').textContent = state.r05Data.length + ' rows';
+        document.getElementById('badgeR05').textContent = 'Ready';
         document.getElementById('btnR05').classList.add('loaded');
         rebuildMaps();
-        toast(`โหลด R05.106 สำเร็จ: ${state.r05Data.length} รายการ`, 'success');
+        const msg = skipped > 0
+          ? `โหลด R05.106 สำเร็จ: ${state.r05Data.length} รายการ (ข้าม ${skipped} แถวที่ col A หรือ E ว่าง)`
+          : `โหลด R05.106 สำเร็จ: ${state.r05Data.length} รายการ`;
+        toast(msg, 'success');
         saveSession();
       });
     }
@@ -1812,16 +1877,31 @@
       if (!file) return;
       parseFile(file, (rows) => {
         state.catASkus.clear();
+        let skipped = 0;
         rows.forEach((row, i) => {
           if (i === 0 || !row || row.length === 0) return;
-          const sku = (row[0] || '').toString().trim();
-          const colD = (row[3] || '').toString().trim();
-          if (sku && colD === 'A') state.catASkus.add(sku);
+
+          // Schema Cat A List:
+          //   col A (index 0) = NUMBER  → SKU (numeric id)
+          //   col B (index 1) = STRING  → (text)
+          //   col C (index 2) = STRING  → (text)
+          //   col D (index 3) = STRING  → Category flag — must equal "A" exactly
+
+          // col A: numeric id — keep as string representation
+          const sku = (row[0] === undefined || row[0] === null) ? '' : String(row[0]).trim();
+          // col D: strict string comparison — only uppercase "A" is valid
+          const colD = (row[3] === undefined || row[3] === null) ? '' : String(row[3]).trim();
+
+          if (!sku) { skipped++; return; }
+          if (colD === 'A') state.catASkus.add(sku);
         });
-        document.getElementById('badgeCatA').textContent = state.catASkus.size + ' SKU';
+        document.getElementById('badgeCatA').textContent = 'Ready';
         document.getElementById('btnCatA').classList.add('loaded');
         rebuildMaps();
-        toast(`โหลด Cat A สำเร็จ: ${state.catASkus.size} SKU`, 'success');
+        const msg = skipped > 0
+          ? `โหลด Cat A สำเร็จ: ${state.catASkus.size} SKU (ข้าม ${skipped} แถวที่ col A ว่าง)`
+          : `โหลด Cat A สำเร็จ: ${state.catASkus.size} SKU`;
+        toast(msg, 'success');
         saveSession();
       });
     }
@@ -1896,17 +1976,17 @@
 
           if (session.r01Data && session.r01Data.length > 0) {
             state.r01Data = session.r01Data;
-            document.getElementById('badgeR01').textContent = state.r01Data.length + ' rows';
+            document.getElementById('badgeR01').textContent = 'Ready';
             document.getElementById('btnR01').classList.add('loaded');
           }
           if (session.r05Data && session.r05Data.length > 0) {
             state.r05Data = session.r05Data;
-            document.getElementById('badgeR05').textContent = state.r05Data.length + ' rows';
+            document.getElementById('badgeR05').textContent = 'Ready';
             document.getElementById('btnR05').classList.add('loaded');
           }
           if (session.catASkus && session.catASkus.length > 0) {
             state.catASkus = new Set(session.catASkus);
-            document.getElementById('badgeCatA').textContent = state.catASkus.size + ' SKU';
+            document.getElementById('badgeCatA').textContent = 'Ready';
             document.getElementById('btnCatA').classList.add('loaded');
           }
 

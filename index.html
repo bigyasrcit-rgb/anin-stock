@@ -3189,13 +3189,32 @@
     }
 
     function updateGoogleSignInStatus(isSignedIn) {
+      console.log('updateGoogleSignInStatus called, isSignedIn:', isSignedIn);
       const btn = document.getElementById('btnGoogleSheets');
+      if (!btn) {
+        console.error('Button btnGoogleSheets not found');
+        return;
+      }
+      
       if (isSignedIn) {
-        googleUser = gapi.auth2.getAuthInstance().currentUser.get();
+        const authInstance = gapi.auth2.getAuthInstance();
+        if (!authInstance) {
+          console.error('Auth instance not found');
+          return;
+        }
+        
+        googleUser = authInstance.currentUser.get();
+        if (!googleUser) {
+          console.error('Current user not found');
+          return;
+        }
+        
         googleToken = googleUser.getAuthResponse().access_token;
+        
         
         // Get profile safely
         const profile = googleUser.getBasicProfile();
+        console.log('Profile:', profile);
         if (profile) {
           const name = profile.getGivenName() || profile.getName() || 'User';
           btn.innerHTML = `📊 Hi, ${name}`;
@@ -3218,10 +3237,22 @@
     }
 
     function handleGoogleSheetsClick() {
-      if (gapi.auth2.getAuthInstance().isSignedIn.get()) {
+      console.log('handleGoogleSheetsClick called');
+      const authInstance = gapi.auth2.getAuthInstance();
+      console.log('isSignedIn:', authInstance.isSignedIn.get());
+      console.log('currentUser:', authInstance.currentUser.get());
+      
+      if (authInstance.isSignedIn.get()) {
+        console.log('User is signed in, exporting...');
         exportToGoogleSheets();
       } else {
-        gapi.auth2.getAuthInstance().signIn();
+        console.log('User not signed in, signing in...');
+        authInstance.signIn().then(user => {
+          console.log('Sign in success:', user.getBasicProfile().getName());
+          updateGoogleSignInStatus(true);
+        }).catch(err => {
+          console.error('Sign in error:', err);
+        });
       }
     }
 

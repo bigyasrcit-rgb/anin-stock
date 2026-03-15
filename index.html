@@ -3193,11 +3193,20 @@
       if (isSignedIn) {
         googleUser = gapi.auth2.getAuthInstance().currentUser.get();
         googleToken = googleUser.getAuthResponse().access_token;
-        const name = googleUser.getBasicProfile().getGivenName();
-        btn.innerHTML = `📊 Hi, ${name}`;
-        btn.style.borderColor = 'rgba(26, 158, 92, 0.35)';
-        btn.style.color = 'var(--green)';
-        btn.style.background = 'rgba(26, 158, 92, 0.08)';
+        
+        // Get profile safely
+        const profile = googleUser.getBasicProfile();
+        if (profile) {
+          const name = profile.getGivenName() || profile.getName() || 'User';
+          btn.innerHTML = `📊 Hi, ${name}`;
+          btn.style.borderColor = 'rgba(26, 158, 92, 0.35)';
+          btn.style.color = 'var(--green)';
+          btn.style.background = 'rgba(26, 158, 92, 0.08)';
+          console.log('Google login success:', name);
+        } else {
+          // Profile not ready yet, wait a bit
+          setTimeout(() => updateGoogleSignInStatus(isSignedIn), 100);
+        }
       } else {
         googleUser = null;
         googleToken = null;

@@ -443,7 +443,7 @@
                 <span class="mt-icon">👤</span>
                 <span class="mt-label" id="scannerLabel">Scanned By</span>
                 <span class="mt-name" id="scannerName" style="display:none"></span>
-                <span class="mt-lock-badge" id="scannerBadge" style="display:none">✓ Login</span>
+                <span class="mt-lock-badge" id="scannerBadge" style="display:none">✓ ล็อค</span>
                 <span class="mt-clear" id="scannerClear" style="display:none" onclick="clearField('scanner',event)">✕</span>
               </div>
             </div>
@@ -452,7 +452,7 @@
                 <span class="mt-icon">🔍</span>
                 <span class="mt-label" id="auditorLabel">Auditor</span>
                 <span class="mt-name" id="auditorName" style="display:none"></span>
-                <span class="mt-lock-badge" id="auditorBadge" style="display:none" style="background:rgba(224,140,0,0.12);color:var(--yellow);">✓ Login</span>
+                <span class="mt-lock-badge" id="auditorBadge" style="display:none" style="background:rgba(224,140,0,0.12);color:var(--yellow);">✓ ล็อค</span>
                 <span class="mt-clear" id="auditorClear" style="display:none" onclick="clearField('auditor',event)">✕</span>
               </div>
             </div>
@@ -505,6 +505,9 @@
       <li><code>barcode</code> เช่น <strong>8852673000311</strong></li>
       <li><code>barcode,qty</code> เช่น <strong>8852673000311,50</strong></li>
       <li><code>location,barcode,qty</code> เช่น <strong>H11,8852673000311,50</strong></li>
+      <li><code>SKU</code> เช่น <strong>10012345</strong> — ใช้เมื่อไม่มี Barcode (ระบบจะหา Barcode หน่วยเล็กสุด H=1 ให้อัตโนมัติ)</li>
+      <li><code>SKU,qty</code> เช่น <strong>10012345,10</strong></li>
+      <li><code>location,SKU,qty</code> เช่น <strong>A01,10012345,10</strong></li>
     </ul>
     <p style="margin-bottom:6px;">คำแนะนำ:</p>
     <ul style="padding-left:18px;margin:0 0 14px 0;">
@@ -574,11 +577,11 @@
 // ⚙️ เพิ่ม/แก้พนักงานได้ที่นี่ — PIN ของแต่ละคนเป็น unique
 // role: 'scanner' | 'auditor'
 const USERS = [
-  { pin: '565656', name: 'ก้า',      role: 'scanner' },
-  { pin: '222222', name: 'กิ๊ฟ',      role: 'scanner' },
-  { pin: '111111', name: 'นิกกี้',     role: 'auditor' },
-  { pin: '222222', name: 'สุ่ย',      role: 'auditor' },
-  { pin: '333333', name: 'กิ๊ฟ',      role: 'auditor' },
+  { pin: '111111', name: 'ก้า',       role: 'scanner' },
+  { pin: '222222', name: 'บอล',       role: 'scanner' },
+  { pin: '333333', name: 'ใหม่',      role: 'scanner' },
+  { pin: '444444', name: 'สุดา',      role: 'auditor' },
+  { pin: '555555', name: 'ประสิทธิ์', role: 'auditor' },
 ];
 const PIN_MAX_LEN = 6;
 
@@ -749,7 +752,7 @@ window.addEventListener('resize', () => {
 // ===================== State =====================
 const state = {
   mode:'stock100', r01Data:[], r05Data:[], catASkus:new Set(), catSkuMap:new Map(),
-  skuMap:new Map(), barcodeMap:new Map(), scanData:new Map(), unknownScans:[],
+  skuMap:new Map(), barcodeMap:new Map(), skuDirectMap:new Map(), scanData:new Map(), unknownScans:[],
   currentFilter:'all', pendingAuditSku:null,
 };
 
@@ -834,6 +837,7 @@ function rebuildMaps() {
   state.skuMap.clear();state.barcodeMap.clear();
   state.r01Data.forEach(r=>{if(!state.skuMap.has(r.colE))state.skuMap.set(r.colE,{sku:r.colE,productName:r.productName||r.colE,systemQty:r.systemQty,barcodes:[]});});
   state.r05Data.forEach(r=>{if(state.skuMap.has(r.colE)){state.skuMap.get(r.colE).barcodes.push({barcode:r.barcode,unitName:r.unitName,unitMultiplier:r.unitMultiplier});state.barcodeMap.set(r.barcode,r.colE);}});
+  buildSkuDirectMap();
   const active=state.mode==='catA'&&state.catASkus.size>0?[...state.skuMap.keys()].filter(s=>state.catASkus.has(s)):[...state.skuMap.keys()];
   active.forEach(sku=>{if(!state.scanData.has(sku))state.scanData.set(sku,{countedQty:0,status:'pending',retries:0,timestamp:'',scannedBy:'',auditor:'',auditStatus:'pending',barcode:'',location:'',scans:[]});});
   updateStats();renderTable();invalidatePopupRowsCache();
@@ -845,6 +849,19 @@ let renderDebounceTimer=null,statsDebounceTimer=null;
 function scheduleRender(){clearTimeout(renderDebounceTimer);renderDebounceTimer=setTimeout(renderTable,80);}
 function scheduleStats(){clearTimeout(statsDebounceTimer);statsDebounceTimer=setTimeout(updateStats,80);}
 function handleScanKey(e){if(e.key==='Enter')processScan();}
+
+// ===================== SKU Direct Scan Map =====================
+// Maps SKU → barcode ที่มี unitMultiplier = 1 (หน่วยเล็กสุด) สำหรับกรณีสแกน SKU โดยตรง
+// ถ้า SKU มีหลาย barcode ที่ H=1 จะใช้ตัวแรกที่พบ
+
+function buildSkuDirectMap() {
+  state.skuDirectMap = new Map();
+  state.r05Data.forEach(r => {
+    if (r.unitMultiplier === 1 && !state.skuDirectMap.has(r.colE)) {
+      state.skuDirectMap.set(r.colE, { barcode: r.barcode, unitName: r.unitName });
+    }
+  });
+}
 
 function parseScanLine(line){
   const p=line.split(',').map(x=>x.trim());
@@ -878,8 +895,31 @@ function handleBarcode(parsed,immediateRender=true){
   const scannedBy=document.getElementById('inputScanner').value.trim()||'Unknown';
   const auditor=document.getElementById('inputAuditor').value.trim()||'';
   const now=new Date().toISOString().replace('T',' ').slice(0,19);
-  const sku=state.barcodeMap.get(barcode);
   invalidatePopupRowsCache();
+
+  // ──────────────────────────────────────────────────────────────────
+  // STEP 1: หา SKU จาก barcodeMap ก่อน (เส้นทางปกติ — สแกน Barcode)
+  // ──────────────────────────────────────────────────────────────────
+  let sku = state.barcodeMap.get(barcode);
+  let resolvedBarcode = barcode;   // barcode ที่ใช้บันทึกจริง
+  let resolvedFromSku = false;     // flag: สแกน SKU โดยตรง
+
+  // ──────────────────────────────────────────────────────────────────
+  // STEP 2: ถ้าหา barcode ไม่เจอ — ลองตีความว่า input คือ SKU
+  //   → ค้นหา skuDirectMap (barcode ที่มี col H = 1 ของ SKU นั้น)
+  // ──────────────────────────────────────────────────────────────────
+  if (!sku && state.skuDirectMap) {
+    const directEntry = state.skuDirectMap.get(barcode); // barcode = sku input
+    if (directEntry) {
+      sku = barcode;                        // barcode field ถืกใส่ SKU มา
+      resolvedBarcode = directEntry.barcode; // ใช้ barcode (H=1) จริงๆ
+      resolvedFromSku = true;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // STEP 3: ยังไม่พบ → Unknown / Cat-other flow เดิม
+  // ──────────────────────────────────────────────────────────────────
   if(!sku){
     const ex=state.unknownScans.find(u=>u.barcode===barcode);const aq=qty!==null?qty:1;
     if(ex){ex.count+=aq;if(location)ex.location=location;}else state.unknownScans.push({barcode,count:aq,location:location||'',timestamp:now,scannedBy});
@@ -894,17 +934,39 @@ function handleBarcode(parsed,immediateRender=true){
     toast(`⚠️ CAT ${cl} — ไม่อยู่ในรายการนับ Cat A`,'warn');
     saveSession();if(immediateRender){updateStats();renderTable();}return;
   }
+
+  // ──────────────────────────────────────────────────────────────────
+  // STEP 4: พบ SKU — ประมวลผลปกติ
+  //   ถ้า resolvedFromSku=true → ใช้ resolvedBarcode (H=1) และ mult=1
+  // ──────────────────────────────────────────────────────────────────
   const skuInfo=state.skuMap.get(sku);if(!skuInfo)return;
-  const bcInfo=skuInfo.barcodes.find(b=>b.barcode===barcode);
-  const mult=bcInfo?bcInfo.unitMultiplier:1;const unitName=bcInfo?bcInfo.unitName:'';
+
+  let mult, unitName;
+  if (resolvedFromSku) {
+    // สแกน SKU โดยตรง → ใช้ barcode H=1 เสมอ, multiplier = 1
+    const directEntry = state.skuDirectMap.get(sku);
+    mult     = 1;
+    unitName = directEntry ? directEntry.unitName : '';
+    if (resolvedFromSku) {
+      toast(`🔍 สแกน SKU: ${sku} → ใช้ Barcode ${resolvedBarcode} (หน่วยเล็กสุด)`, 'info');
+    }
+  } else {
+    const bcInfo=skuInfo.barcodes.find(b=>b.barcode===resolvedBarcode);
+    mult    =bcInfo?bcInfo.unitMultiplier:1;
+    unitName=bcInfo?bcInfo.unitName:'';
+  }
+
   const sd=state.scanData.get(sku);if(!sd)return;
-  if(sd.status&&!['pending','scanning'].includes(sd.status)){appendScanRow(sku,barcode,sd.countedQty,unitName,sd.status,location);saveSession();if(immediateRender){updateStats();renderTable();}return;}
+  if(sd.status&&!['pending','scanning'].includes(sd.status)){
+    appendScanRow(sku,resolvedBarcode,sd.countedQty,unitName,sd.status,location);
+    saveSession();if(immediateRender){updateStats();renderTable();}return;
+  }
   sd.countedQty+=qty!==null?qty*mult:mult;
-  sd.scannedBy=scannedBy;sd.auditor=auditor;sd.timestamp=now;sd.barcode=barcode;
+  sd.scannedBy=scannedBy;sd.auditor=auditor;sd.timestamp=now;sd.barcode=resolvedBarcode;
   if(location)sd.location=location;
-  sd.scans.push({barcode,qty:qty!==null?qty*mult:mult,unitName,timestamp:now,location});
+  sd.scans.push({barcode:resolvedBarcode,qty:qty!==null?qty*mult:mult,unitName,timestamp:now,location,fromSku:resolvedFromSku});
   if(!['pass','fail','audit'].includes(sd.status))sd.status='scanning';
-  appendScanRow(sku,barcode,sd.countedQty,unitName,'scanning',location);
+  appendScanRow(sku,resolvedBarcode,sd.countedQty,unitName,'scanning',location);
   saveSession();if(immediateRender){updateStats();renderTable();}
 }
 

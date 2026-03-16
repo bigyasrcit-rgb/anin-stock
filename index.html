@@ -1627,7 +1627,7 @@
           onclick="exportExcel()">⬇️ Export</button>
         <button class="btn" id="btnGoogleSheets"
           style="padding:6px 12px; font-size: 0.75rem; border-color: rgba(66, 133, 244, 0.35); color: #4285f4; background: rgba(66, 133, 244, 0.08); flex: none; width: auto;"
-          onclick="handleGoogleSheetsClick()">📊 Google Sheets</button>
+          onclick="handleGoogleSheetsClick()">Google Sheets</button>
         <button class="btn btn-clear"
           style="padding:6px 12px; font-size: 0.75rem; border-color: var(--red); color: var(--red);"
           onclick="clearAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
@@ -3185,20 +3185,37 @@
     let googleSpreadsheetId = null;   // ★ เพิ่ม
     let googleSpreadsheetUrl = null;  // ★ เพิ่ม
     let googleSyncTimer = null;       // ★ เพิ่ม
+
+    function getGoogleSpreadsheetUrl() {
+      if (googleSpreadsheetUrl) return googleSpreadsheetUrl;
+      if (googleSpreadsheetId) return `https://docs.google.com/spreadsheets/d/${googleSpreadsheetId}/edit`;
+      return null;
+    }
+
+    function openGoogleSheetIfAvailable() {
+      const url = getGoogleSpreadsheetUrl();
+      if (!url) return false;
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return true;
+    }
+
     function setGoogleSheetsButtonConnected(isConnected) {
       const btn = document.getElementById('btnGoogleSheets');
       if (!btn) return;
 
       if (isConnected) {
-        btn.innerHTML = '📊 Connected';
+        btn.innerHTML = 'Google Sheets';
         btn.style.borderColor = 'rgba(26, 158, 92, 0.35)';
         btn.style.color = 'var(--green)';
         btn.style.background = 'rgba(26, 158, 92, 0.08)';
+        const url = getGoogleSpreadsheetUrl();
+        btn.title = url ? `Open: ${url}` : 'Connected (no sheet yet)';
       } else {
-        btn.innerHTML = '📊 Google Sheets';
+        btn.innerHTML = 'Google Sheets';
         btn.style.borderColor = 'rgba(66, 133, 244, 0.35)';
         btn.style.color = '#4285f4';
         btn.style.background = 'rgba(66, 133, 244, 0.08)';
+        btn.title = 'Connect Google Sheets';
       }
     }
 
@@ -3242,6 +3259,9 @@
       }
 
       if (googleAccessToken) {
+        // ถ้าเคยสร้าง/เคยมีชีตแล้ว ให้เปิดชีตก่อน
+        if (openGoogleSheetIfAvailable()) return;
+        // ถ้ายังไม่มีชีต ให้ sync เพื่อสร้างชีตครั้งแรก
         exportToGoogleSheets();
         return;
       }

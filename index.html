@@ -133,6 +133,8 @@
     .btn-clear:hover { border-color:var(--red); color:var(--red); }
     .btn-export { background:var(--surface2); color:var(--green); border:1px solid rgba(0,230,118,0.3); width:100%; }
     .btn-export:hover { background:rgba(0,230,118,0.1); transform:translateY(-1px); }
+    .btn-backup { padding:6px 12px; font-size:0.75rem; border:1px solid rgba(0,114,198,0.35); color:var(--accent); background:rgba(0,114,198,0.08); flex:none; width:auto; }
+    .btn-backup:hover { background:rgba(0,114,198,0.18); }
     .scan-list-card { border-radius:10px; border:1px solid var(--border); background:var(--surface2); overflow:hidden; }
     .scan-list-header { display:grid; grid-template-columns:98px 120px 1fr 88px 128px 105px; gap:0; background:#eef3fa; border-bottom:1px solid var(--border); font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:var(--text2); overflow:hidden; }
     .scan-list-header > span { position:relative; padding:7px 10px; border-right:1px solid var(--border); overflow:hidden; white-space:nowrap; display:flex; align-items:center; }
@@ -225,6 +227,9 @@
         <div class="db-dot active" id="dbDot"></div>
         <span id="dbStatus" style="color:var(--text2)">Ready</span>
       </div>
+      <input type="file" id="fileRestore" accept=".json" style="display:none" onchange="restoreSession(event)">
+      <button class="btn btn-backup" onclick="backupSession()">💾 Backup</button>
+      <button class="btn btn-backup" onclick="var _f=document.getElementById('fileRestore');_f.value='';_f.click()">📂 Restore</button>
       <button class="btn btn-export" style="padding:6px 12px;font-size:0.75rem;border-color:rgba(26,158,92,0.35);color:var(--green);background:rgba(26,158,92,0.08);flex:none;width:auto;" onclick="exportExcel()">⬇️ Export</button>
       <button class="btn" id="btnGoogleSheets" style="padding:6px 12px;font-size:0.75rem;border-color:rgba(66,133,244,0.35);color:#4285f4;background:rgba(66,133,244,0.08);flex:none;width:auto;" onclick="handleGoogleSheetsClick()">Google Sheets</button>
       <button class="btn btn-clear" style="padding:6px 12px;font-size:0.75rem;border-color:var(--red);color:var(--red);" onclick="clearAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
@@ -807,12 +812,6 @@ function appendScanRow(sku,barcode,totalQty,unit,status,location='',catLabel='')
 }
 
 function clearScanList(){
-  for(const sku of scanListMap.keys()){
-    const sd=state.scanData.get(sku);if(!sd)continue;
-    sd.countedQty=0;sd.status='pending';sd.timestamp='';sd.barcode='';
-    sd.scans=[];sd.scannedBy='';sd.auditor='';sd.auditStatus='pending';
-    delete sd.soldQty;delete sd.rawCountedQty;
-  }
   scanListMap.clear();
   saveSession();updateStats();invalidatePopupRowsCache();renderScanList();
 }
@@ -979,10 +978,10 @@ function getStatusPill(s){const m={pass:'<span class="pill pill-pass">✅ Pass</
 
 function exportExcel(){
   const active=getActiveSkus(),header=['SKU','Barcode','ProductName','SystemQty','CountedQty','Status','Timestamp','Audit Status'],rows=[header];
-  active.forEach(sku=>{const info=state.skuMap.get(sku),sd=state.scanData.get(sku);if(!info||!sd||sd.status==='pending'||sd.status==='scanning')return;rows.push([sku,info.barcodes.map(b=>b.barcode).join('; '),info.productName,info.systemQty,sd.countedQty,sd.status,sd.timestamp||'',sd.auditStatus||'pending']);});
-  state.unknownScans.forEach(u=>rows.push(['—',u.barcode,'ไม่มีในระบบ',0,u.count,'unknown',u.timestamp,'—']));
+  active.forEach(sku=>{const info=state.skuMap.get(sku),sd=state.scanData.get(sku);if(!info||!sd||sd.status!=='audit')return;rows.push([sku,info.barcodes.map(b=>b.barcode).join('; '),info.productName,info.systemQty,sd.countedQty,sd.status,sd.timestamp||'',sd.auditStatus||'pending']);});
+  if(rows.length===1){toast('ไม่มีสินค้า Audit','warn');return;}
   const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=header.map((_,c)=>{let m=header[c].length;rows.slice(1).forEach(r=>{const v=r[c]==null?'':String(r[c]);if(v.length>m)m=v.length;});return{wch:m+2};});
-  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'StockCount');XLSX.writeFile(wb,`stock_count_${state.mode}_${new Date().toISOString().slice(0,10)}.xlsx`);toast('Export Excel สำเร็จ','success');
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Audit');XLSX.writeFile(wb,`audit_${state.mode}_${new Date().toISOString().slice(0,10)}.xlsx`);toast(`Export Audit ${rows.length-1} รายการ สำเร็จ`,'success');
 }
 
 function openGuideModal(){document.getElementById('guidePopover').style.display='block';}
@@ -1009,6 +1008,39 @@ function initGoogleClient(){gapi.load('client',async()=>{try{await gapi.client.i
 function handleGoogleSheetsClick(){if(!googleTokenClient){toast('กำลังเริ่ม Google...','warn');return;}if(googleAccessToken){openGoogleSheetIfAvailable();exportToGoogleSheets();return;}googleTokenClient.requestAccessToken({prompt:''});}
 function exportToGoogleSheets(){const active=getActiveSkus(),header=['SKU','Barcode','ProductName','SystemQty','CountedQty','Status','Timestamp','Auditor','Audit Status','Scanned By'],rows=[header];active.forEach(sku=>{const info=state.skuMap.get(sku),sd=state.scanData.get(sku);if(!info||!sd||sd.status==='pending'||sd.status==='scanning')return;rows.push([sku,info.barcodes.map(b=>b.barcode).join('; '),info.productName,info.systemQty,sd.countedQty,sd.status,sd.timestamp||'',sd.auditor||'',sd.auditStatus||'pending',sd.scannedBy||'']);});state.unknownScans.forEach(u=>rows.push(['—',u.barcode,'ไม่มีในระบบ',0,u.count,'unknown',u.timestamp,'','—',u.scannedBy]));if(googleSpreadsheetId){writeToSheet(googleSpreadsheetId,rows);return;}const ts=new Date().toISOString().slice(0,10);gapi.client.sheets.spreadsheets.create({properties:{title:`Stock_Count_${state.mode}_${ts}`}}).then(r=>{googleSpreadsheetId=r.result.spreadsheetId;googleSpreadsheetUrl=r.result.spreadsheetUrl;localStorage.setItem('googleSpreadsheetId',googleSpreadsheetId);localStorage.setItem('googleSpreadsheetUrl',googleSpreadsheetUrl);googleSheetTitle='Sheet1';localStorage.setItem('googleSheetTitle','Sheet1');writeToSheet(googleSpreadsheetId,rows);}).catch(e=>toast('❌ สร้าง Sheet ไม่สำเร็จ: '+(e.result?.error?.message||e.message),'error'));}
 function writeToSheet(id,rows){const resTitle=async()=>{try{const m=await gapi.client.sheets.spreadsheets.get({spreadsheetId:id});const t=m?.result?.sheets?.[0]?.properties?.title||null;if(t){googleSheetTitle=t;localStorage.setItem('googleSheetTitle',t);}return t;}catch{return null;}};const tryW=async t=>{const sn=t||googleSheetTitle||'Sheet1';await gapi.client.sheets.spreadsheets.values.clear({spreadsheetId:id,range:sn});await gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id,range:`${sn}!A1`,valueInputOption:'RAW',resource:{values:rows}});};(async()=>{try{await tryW(null);}catch(e){const msg=e?.result?.error?.message||e?.message||'',st=e?.result?.error?.status||'';if(st!=='UNAUTHENTICATED'&&/Sheet1|Unable to parse range|No sheet/i.test(msg)){const t=await resTitle();if(t)await tryW(t);else throw e;}else throw e;}toast(`✅ Sync Sheets (${rows.length-1} รายการ)`,'success');})().catch(e=>{const st=e.result?.error?.status||'';if(st==='UNAUTHENTICATED'||e.status===401){googleAccessToken=null;setGoogleSheetsButtonConnected(false);toast('⚠️ Session หมดอายุ กด Google Sheets อีกครั้ง','warn');return;}toast('❌ Sync ไม่สำเร็จ: '+(e.result?.error?.message||e.message),'error');});}
+
+function backupSession(){
+  const sdObj={};for(const[k,v]of state.scanData.entries()){const{scannedBy,auditor,retries,scans,...keep}=v;sdObj[k]=keep;}
+  const slObj={};for(const[k,v]of scanListMap.entries())slObj[k]=v;
+  const r16Obj={};for(const[k,v]of state.r16SalesMap.entries())r16Obj[k]=v;
+  const data=JSON.stringify({mode:state.mode,r01Data:state.r01Data,r05Data:state.r05Data,catASkus:[...state.catASkus],r16SalesMap:r16Obj,r16Loaded:state.r16Loaded,scanData:sdObj,unknownScans:state.unknownScans,scanListMap:slObj});
+  const ts=new Date().toISOString().slice(0,16).replace('T','_').replace(':','');
+  const a=document.createElement('a');a.href='data:application/json;charset=utf-8,'+encodeURIComponent(data);a.download=`stock_backup_${ts}.json`;a.click();
+  toast('Backup สำเร็จ','success');
+}
+
+function restoreSession(event){
+  const file=event.target.files[0];if(!file)return;
+  const r=new FileReader();
+  r.onload=e=>{
+    try{
+      const s=JSON.parse(e.target.result);
+      if(s.r01Data?.length){state.r01Data=s.r01Data;document.getElementById('badgeR01').textContent='Ready';}
+      if(s.r05Data?.length){state.r05Data=s.r05Data;document.getElementById('badgeR05').textContent='Ready';}
+      if(s.catASkus?.length){state.catASkus=new Set(s.catASkus);}
+      if(s.r16Loaded){state.r16Loaded=true;document.getElementById('badgeR16').textContent='Ready';}
+      if(s.r16SalesMap){state.r16SalesMap.clear();for(const k in s.r16SalesMap)state.r16SalesMap.set(k,s.r16SalesMap[k]);}
+      if(state.r01Data.length&&state.r05Data.length)rebuildMaps();
+      if(s.scanData){state.scanData.clear();for(const k in s.scanData)state.scanData.set(k,{scannedBy:'',auditor:'',retries:0,scans:[],...s.scanData[k]});}
+      if(s.unknownScans)state.unknownScans=s.unknownScans;
+      if(s.scanListMap){scanListMap.clear();for(const k in s.scanListMap)scanListMap.set(k,s.scanListMap[k]);}
+      saveSession();renderScanList();updateStats();renderTable();invalidatePopupRowsCache();updateConfirmBtn();
+      toast('Restore สำเร็จ','success');
+    }catch(err){toast('ไฟล์ไม่ถูกต้อง','error');}
+    event.target.value='';
+  };
+  r.readAsText(file);
+}
 
 initGoogleClient();
 </script>

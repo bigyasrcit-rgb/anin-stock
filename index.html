@@ -1173,6 +1173,7 @@ async function restoreFromFirestore(force=false){
     const doc=await _db.collection('stock_sessions').doc(getSessionId()).get();
     if(!doc.exists){document.getElementById('dbStatus').textContent='Ready';return;}
     const s=doc.data().session_data;
+    console.log('[Firestore restore] keys:', Object.keys(s), 'scanData keys:', s.scanData?Object.keys(s.scanData).length:0, 'scanListMap keys:', s.scanListMap?Object.keys(s.scanListMap).length:0);
     if(s.r16Loaded){state.r16Loaded=true;document.getElementById('badgeR16').textContent='Ready';}
     if(s.r16SalesMap){state.r16SalesMap.clear();for(const k in s.r16SalesMap)state.r16SalesMap.set(k,s.r16SalesMap[k]);}
     if(s.scanData){state.scanData.clear();for(const k in s.scanData)state.scanData.set(k,{scannedBy:'',auditor:'',retries:0,scans:[],...s.scanData[k]});}
@@ -1180,6 +1181,7 @@ async function restoreFromFirestore(force=false){
     if(s.scanListMap){scanListMap.clear();for(const k in s.scanListMap)scanListMap.set(k,s.scanListMap[k]);}
     if(state.r01Data.length&&state.r05Data.length)rebuildMaps();
     saveSession();renderScanList();updateStats();renderTable();invalidatePopupRowsCache();updateConfirmBtn();
+    console.log('[Firestore restore] done — scanData.size:', state.scanData.size, 'scanListMap.size:', scanListMap.size, 'r01:', state.r01Data.length, 'r05:', state.r05Data.length);
     document.getElementById('dbStatus').textContent='Synced ☁️';
   }catch(e){document.getElementById('dbStatus').textContent='Ready';console.warn('Firestore restore:',e.message);}
 }

@@ -234,7 +234,7 @@
       <button class="btn" style="padding:6px 12px;font-size:0.75rem;border-color:rgba(0,114,198,0.35);color:var(--accent);background:rgba(0,114,198,0.08);flex:none;width:auto;" onclick="var _f=document.getElementById('fileRestore');_f.value='';_f.click()">📂 Restore</button>
       <button class="btn btn-export" style="padding:6px 12px;font-size:0.75rem;border-color:rgba(26,158,92,0.35);color:var(--green);background:rgba(26,158,92,0.08);flex:none;width:auto;" onclick="exportExcel()">⬇️ Export</button>
       <button class="btn" id="btnAdmin" style="padding:6px 12px;font-size:0.75rem;border-color:rgba(107,63,160,0.35);color:var(--purple);background:rgba(107,63,160,0.08);flex:none;width:auto;" onclick="toggleAdmin()">🔒 Administrator</button>
-      <button class="btn btn-clear" style="padding:6px 12px;font-size:0.75rem;border-color:var(--red);color:var(--red);display:none;" id="btnClearAll" onclick="clearAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
+      <button class="btn btn-clear" style="padding:6px 12px;font-size:0.75rem;border-color:var(--red);color:var(--red);" onclick="clearAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
     </div>
   </div>
 
@@ -764,12 +764,11 @@ function parseScanLine(line){
 function updateConfirmBtn(){
   const btn=document.getElementById('btnConfirm');
   if(!btn)return;
-  btn.disabled=!_adminMode||!state.r16Loaded;
-  btn.title=!_adminMode?'ต้องเข้าโหมด Administrator ก่อน':(!state.r16Loaded?'กรุณาโหลดไฟล์ R16.104 ก่อน':'');
+  btn.disabled=!state.r16Loaded;
+  btn.title=state.r16Loaded?'':'กรุณาโหลดไฟล์ R16.104 ก่อน';
 }
 
 function validateAndProcess(){
-  if(!_adminMode){toast('ต้องเข้าโหมด Administrator ก่อน','warn');return;}
   if(!state.r16Loaded){toast('กรุณาโหลดไฟล์ R16.104 ก่อนยืนยัน','warn');return;}
   processScan();evaluatePendingScans();
 }
@@ -1138,26 +1137,12 @@ function applyAdminUI(){
   const btn=document.getElementById('btnAdmin');
   if(_adminMode){
     btn.textContent='🔓 Administrator ON';
-    btn.style.borderColor='rgba(26,158,92,0.5)';btn.style.color='var(--green)';btn.style.background='rgba(26,158,92,0.12)';
+    btn.style.borderColor='rgba(224,140,0,0.5)';btn.style.color='var(--yellow)';btn.style.background='rgba(224,140,0,0.12)';
+    document.getElementById('dbStatus').textContent='Admin Mode (Local Only)';
   } else {
     btn.textContent='🔒 Administrator';
     btn.style.borderColor='rgba(107,63,160,0.35)';btn.style.color='var(--purple)';btn.style.background='rgba(107,63,160,0.08)';
   }
-  // ซ่อน/แสดงปุ่มที่ต้องใช้ Admin
-  document.getElementById('btnClearAll').style.display=_adminMode?'':'none';
-  document.getElementById('btnConfirm').disabled=!_adminMode||!state.r16Loaded;
-  // Upload files
-  document.querySelectorAll('.upload-file-item').forEach(el=>{el.style.pointerEvents=_adminMode?'auto':'none';el.style.opacity=_adminMode?'1':'0.5';});
-  // Scan input
-  const si=document.getElementById('scanInput');
-  si.disabled=!_adminMode;si.placeholder=_adminMode?'Scan Barcode':'View Only — กด Administrator เพื่อปลดล็อก';
-  // Export button
-  document.querySelector('.btn-export').style.display=_adminMode?'':'none';
-  // Restore button
-  document.querySelectorAll('button').forEach(b=>{if(b.textContent.includes('Restore'))b.style.display=_adminMode?'':'none';});
-  // Clear scan list button
-  const clearBtn=document.querySelector('.btn-clear:not(#btnClearAll)');
-  if(clearBtn&&!clearBtn.id)clearBtn.style.display=_adminMode?'':'none';
 }
 
 function backupSession(){

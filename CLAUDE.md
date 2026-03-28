@@ -3,6 +3,7 @@
 ## Project Overview
 ระบบนับสต็อกสินค้าแบบ single-page HTML สำหรับใช้งานใน browser โดยตรง ไม่มี backend
 รองรับ 3 สาขา (SRC, KKL, SSS) แยกข้อมูลกันผ่าน Cloud Firestore
+รองรับ multi-device: เครื่อง A สแกน → เครื่อง B ดึงข้อมูลจาก Cloud ได้
 
 ## File Structure
 ```
@@ -42,7 +43,7 @@ let currentBranch = localStorage.getItem('selectedBranch') || '';
 ```js
 state.r01Data       // [] — product master (SKU, productName, systemQty)
 state.r05Data       // [] — barcode master (barcode → SKU mapping)
-state.r16SalesMap   // Map<SKU, soldQty> — sales during count period
+state.r16SalesMap   // Map<SKU, soldQty> — sales during count period (qty × BASEQUANTITY)
 state.skuMap        // Map<SKU, {productName, systemQty, barcodes[]}>
 state.barcodeMap    // Map<barcode, SKU>
 state.skuDirectMap  // Map<SKU, {barcode, unitName}> — for scanning by SKU
@@ -67,11 +68,13 @@ handleScanKey → processScan → drainQueue → handleBarcode → appendScanRow
 
 ### Confirm Logic (evaluatePendingScans)
 ```
-effectiveCnt = countedQty + soldQty (R16)
+soldQty = R16 Col S (จำนวนหน่วย) × R16 Col R (BASEQUANTITY / multiplier)
+effectiveCnt = countedQty + soldQty
 effectiveCnt === systemQty → pass
 effectiveCnt !== systemQty → audit
 ```
 หมายเหตุ: บวก soldQty กลับเข้าไป (ของที่ขายไประหว่างนับต้องนับรวม)
+BASEQUANTITY (Col R) เป็นตัวคูณแปลงหน่วยขาย → หน่วยนับ (default = 1)
 
 ### R16 Re-evaluate
 หลังโหลด R16 ใหม่ ระบบจะ re-evaluate item ที่เป็น `audit` อัตโนมัติ
@@ -87,11 +90,15 @@ effectiveCnt !== systemQty → audit
 | `evaluatePendingScans()` | เปรียบเทียบกับ systemQty → pass/audit |
 | `reEvaluateAuditItems()` | re-evaluate audit items หลังโหลด R16 ใหม่ |
 | `appendScanRow()` | อัปเดต scanListMap (ไม่ render) |
+| `rebuildScanListMap()` | สร้าง scanListMap จาก scanData (ข้าม pending) |
 | `renderScanList()` | render scan list UI (max 100 rows) |
 | `saveSession()` | บันทึก localStorage (branch-specific key) |
 | `scheduleSave()` | debounce saveSession (400ms) |
-| `syncToFirestore()` | sync ขึ้น Firestore (debounce 3s) |
+| `syncToFirestore()` | sync ขึ้น Firestore เป็น JSON string (debounce 3s) |
+| `syncMasterToFirestore()` | sync R01/R05 ขึ้น Firestore (แยก document) |
 | `restoreFromFirestore(force)` | ดึงข้อมูลจาก Firestore (force=true ข้าม localStorage check) |
+| `restoreMasterFromFirestore()` | ดึง R01/R05 จาก Firestore (fallback format เก่า) |
+| `pullFromCloud()` | ปุ่ม "ดึงข้อมูล" → restoreFromFirestore(true) |
 | `selectBranch(branch)` | สลับสาขา (async — save ก่อน แล้ว clear แล้ว load) |
 | `backupSession()` | download JSON backup ลง local |
 | `restoreSession(event)` | โหลด JSON backup กลับเข้าระบบ |
@@ -117,34 +124,56 @@ effectiveCnt !== systemQty → audit
 
 ## Firestore
 **Collection:** `stock_sessions`
-**Document ID:** ชื่อสาขา (`SRC`, `KKL`, `SSS`) — session เดียวต่อสาขา ต่อเนื่องข้ามวัน
-**Fields:** `session_data`, `updated_at`
+**Plan:** Spark (Free) — ไม่มีค่าใช้จ่าย, เกิน quota จะ block request (ไม่คิดเงิน)
 
-ข้อมูลที่เก็บใน Firestore (ไม่รวม r01Data/r05Data เพราะขนาดใหญ่):
-- `scanData`, `unknownScans`, `r16SalesMap`, `r16Loaded`, `scanListMap`
+### Documents per branch (เช่น SRC)
+| Document ID | เก็บอะไร | Format |
+|-------------|----------|--------|
+| `SRC` | scanData, unknownScans, r16SalesMap, r16Loaded, scanListMap | `session_data_json` (JSON string) |
+| `SRC_r01` | R01 product master data | `data_json` (JSON string) |
+| `SRC_r05` | R05 barcode master data | `data_json` (JSON string) |
 
-ล้างข้อมูล (`clearAllData`) → ลบทั้ง localStorage + Firestore document พร้อมกัน
+หมายเหตุ:
+- เก็บเป็น **JSON string** เพื่อหลีกเลี่ยง Firestore index limit (40K entries/doc) และ document size limit (1MB)
+- R01/R05 แยก document เพราะรวมกันเกิน 1MB
+- ล้างข้อมูล (`clearAllData`) → ลบทั้ง localStorage + Firestore documents ทั้งหมด (PIN: 22190)
 
-## Sync Logic (F5 / Branch Switch)
+## Multi-Device Sync
+```
+เครื่อง A สแกน → scheduleSave (400ms) → saveSession → syncToFirestore (3s) → Firestore
+เครื่อง B กดปุ่ม "☁️ ดึงข้อมูล" → pullFromCloud → restoreFromFirestore(true) → เห็นข้อมูล
+```
+
+### Sync Logic (F5 / Branch Switch / Pull)
 ```
 F5 refresh:
   loadSession (localStorage) → มี scanData → skip Firestore restore
   loadSession (localStorage) → ไม่มี scanData → restoreFromFirestore
+  มี r01/r05 ใน localStorage → syncMasterToFirestore อัตโนมัติ
 
 สลับสาขา:
   clearTimeout timers → saveSession → await syncToFirestore
   → set newBranch → clear state → loadSession → restoreFromFirestore(force=true)
+
+ปุ่ม "☁️ ดึงข้อมูล":
+  restoreFromFirestore(force=true) → ข้าม localStorage check → ดึงจาก Firestore เสมอ
 ```
 
 ## File Parsing
 - **CSV:** ตรวจ UTF-8 BOM → UTF-8 strict → fallback Windows-874 (Thai Excel)
 - **XLSX:** อ่านผ่าน SheetJS `XLSX.read()` แบบ array buffer
+- **R16.104:** Col S = จำนวนหน่วยขาย, Col R = BASEQUANTITY (multiplier), soldQty = Col S × Col R
 
 ## Column Layout (scan-list)
 ```
 Index: 0=SKU(98px)  1=Barcode(120px)  2=ProductName(flex)  3=Qty(65px)  4=Status(128px)  5=Action(105px)
 ```
 ลาก resize ได้ ไม่เกิน container boundary
+
+## Security
+- ปุ่ม "ล้างข้อมูลทั้งหมด" ต้องใส่ PIN (22190) ก่อนลบ
+- Firestore Security Rules: `allow read, write: if true` (open access, ไม่มี auth)
+- Firebase API key เป็น public key ใช้ระบุ project เท่านั้น (ไม่ใช่ secret)
 
 ## Removed Features (dead code ที่ลบออกไปแล้ว)
 - Overstock system (status, stats, popup column)

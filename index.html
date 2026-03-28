@@ -649,7 +649,7 @@ async function clearAllData() {
   if(pin!==CLEAR_PIN){toast('รหัส PIN ไม่ถูกต้อง','error');return;}
   clearTimeout(_firestoreSyncTimer);clearTimeout(_saveTimer);
   localStorage.removeItem(lsKey());
-  if(_db&&currentBranch){try{await _db.collection('stock_sessions').doc(getSessionId()).delete();await _db.collection('stock_sessions').doc(getSessionId()+'_master').delete();}catch(e){console.warn('Firestore delete:',e.message);}}
+  if(_db&&currentBranch){const id=getSessionId();try{await Promise.all([_db.collection('stock_sessions').doc(id).delete(),_db.collection('stock_sessions').doc(id+'_master').delete(),_db.collection('stock_sessions').doc(id+'_r01').delete(),_db.collection('stock_sessions').doc(id+'_r05').delete()]);}catch(e){console.warn('Firestore delete:',e.message);}}
   state.scanData.clear();state.unknownScans=[];scanListMap.clear();
   state.r01Data=[];state.r05Data=[];state.r16Data=[];state.r16SalesMap.clear();state.r16Loaded=false;
   ['R01','R05','R16'].forEach(k=>{document.getElementById('badge'+k).textContent='ยังไม่โหลด';});
@@ -893,6 +893,7 @@ const scanListMap=new Map();
 function rebuildScanListMap(){
   if(scanListMap.size>0||!state.scanData.size)return;
   for(const[sku,sd]of state.scanData.entries()){
+    if(sd.status==='pending')continue;
     const si=state.skuMap.get(sku);
     const barcodes=si?si.barcodes.map(b=>({barcode:b.barcode,unit:b.unitName})):[{barcode:sku,unit:''}];
     scanListMap.set(sku,{sku,barcodes,totalQty:sd.countedQty,status:sd.status,location:'',catLabel:''});
@@ -1140,20 +1141,36 @@ function restoreSession(event){
 
 async function syncMasterToFirestore(){
   if(!_db||!currentBranch)return;
-  const data={r01Data:state.r01Data,r05Data:state.r05Data};
+  const id=getSessionId();
   try{
-    await _db.collection('stock_sessions').doc(getSessionId()+'_master').set({session_data:data,updated_at:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
+    await Promise.all([
+      _db.collection('stock_sessions').doc(id+'_r01').set({data_json:JSON.stringify(state.r01Data),updated_at:firebase.firestore.FieldValue.serverTimestamp()}),
+      _db.collection('stock_sessions').doc(id+'_r05').set({data_json:JSON.stringify(state.r05Data),updated_at:firebase.firestore.FieldValue.serverTimestamp()})
+    ]);
   }catch(e){console.warn('Firestore master sync:',e.message);}
 }
 
 async function restoreMasterFromFirestore(){
   if(!_db||!currentBranch)return;
-  // ถ้า localStorage มี r01/r05 อยู่แล้ว ไม่ต้องดึงจาก Firestore
   if(state.r01Data.length&&state.r05Data.length)return;
+  const id=getSessionId();
   try{
-    const doc=await _db.collection('stock_sessions').doc(getSessionId()+'_master').get();
-    if(!doc.exists)return;
-    const s=doc.data().session_data;
+    const[r01Doc,r05Doc]=await Promise.all([
+      _db.collection('stock_sessions').doc(id+'_r01').get(),
+      _db.collection('stock_sessions').doc(id+'_r05').get()
+    ]);
+    // fallback: ลองอ่าน format เก่า (_master document)
+    if(!r01Doc.exists&&!r05Doc.exists){
+      const old=await _db.collection('stock_sessions').doc(id+'_master').get();
+      if(!old.exists)return;
+      const s=old.data().session_data;
+      if(s.r01Data?.length){state.r01Data=s.r01Data;document.getElementById('badgeR01').textContent='Ready';}
+      if(s.r05Data?.length){state.r05Data=s.r05Data;document.getElementById('badgeR05').textContent='Ready';}
+      if(state.r01Data.length&&state.r05Data.length)rebuildMaps();
+      return;
+    }
+    if(r01Doc.exists){state.r01Data=JSON.parse(r01Doc.data().data_json);document.getElementById('badgeR01').textContent='Ready';}
+    if(r05Doc.exists){state.r05Data=JSON.parse(r05Doc.data().data_json);document.getElementById('badgeR05').textContent='Ready';}
     if(s.r01Data?.length){state.r01Data=s.r01Data;document.getElementById('badgeR01').textContent='Ready';}
     if(s.r05Data?.length){state.r05Data=s.r05Data;document.getElementById('badgeR05').textContent='Ready';}
     if(state.r01Data.length&&state.r05Data.length)rebuildMaps();

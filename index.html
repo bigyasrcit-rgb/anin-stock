@@ -141,8 +141,10 @@
     .col-resizer::after { content:''; position:absolute; left:50%; top:20%; height:60%; width:2px; background:var(--border); border-radius:1px; transform:translateX(-50%); transition:background 0.15s; }
     .col-resizer:hover::after, .col-resizer.resizing::after { background:var(--accent); }
     .scan-list-body { max-height:460px; overflow-y:auto; }
-    .scan-list-body::-webkit-scrollbar { width:4px; }
-    .scan-list-body::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+    .scan-list-body::-webkit-scrollbar { width:7px; }
+    .scan-list-body::-webkit-scrollbar-thumb { background:var(--text3); border-radius:5px; min-height:40px; }
+    .scan-list-body::-webkit-scrollbar-thumb:hover { background:var(--text2); }
+    .scan-list-body::-webkit-scrollbar-track { background:var(--surface3); border-radius:5px; }
     .scan-row { display:grid; grid-template-columns:98px 120px 1fr 88px 128px 105px; gap:0; border-bottom:1px solid var(--border); align-items:center; animation:rowSlide 0.18s ease; transition:background 0.1s; }
     .scan-row:last-child { border-bottom:none; }
     .scan-row > div { padding:8px 10px; border-right:1px solid rgba(220,228,239,0.5); overflow:hidden; }
@@ -283,7 +285,7 @@
               <strong style="color:var(--orange);display:block;margin-bottom:6px;">3. R16.104 (สินค้าที่ขายระหว่างนับ)</strong>
               <ul style="padding-left:18px;margin:0;">
                 <li>เลือกที่รายงาน R16.104 → สร้างรายงาน → สร้างรายงานตามวันที่ เลือกประจำวัน → ตกลง → ส่งออกเป็น .CSV</li>
-                <li style="margin-top:4px;color:var(--orange);">ระบบคำนวณ: จำนวนขาย = Col S (จำนวน) × Col R (BASEQUANTITY ตัวคูณหน่วย)</li>
+                <li style="margin-top:4px;color:var(--orange);">ระบบคำนวณ: จำนวนขาย = Col R (BASEQUANTITY — จำนวนแปลงเป็นหน่วยเล็กสุดแล้ว)</li>
               </ul>
             </div>
             <div style="background:rgba(59,130,246,0.06);padding:10px 12px;border-radius:8px;border:1px solid rgba(59,130,246,0.3);">
@@ -645,12 +647,10 @@ function loadR16(event) {
       const colC=(r[2]??'').toString().trim().toUpperCase(); // Col C (index 2)
       if(!colC.startsWith('ORCM')&&!colC.startsWith('OCTM')){sk++;continue;}
       const barcode=(r[14]??'').toString().trim();   // Col O (index 14)
-      const rawBaseQty=(r[17]??'').toString().replace(/,|\s/g,'').trim(); // Col R (index 17) = BASEQUANTITY (multiplier)
-      const rawSold=(r[18]??'').toString().replace(/,|\s/g,'').trim(); // Col S (index 18)
+      const rawBaseQty=(r[17]??'').toString().replace(/,|\s/g,'').trim(); // Col R (index 17) = BASEQUANTITY (จำนวนแปลงเป็นหน่วยเล็กสุดแล้ว)
       const skuR16=(r[23]??'').toString().trim();    // Col X (index 23)
-      if(!barcode||rawSold===''){sk++;continue;}
-      const baseQty=isFinite(+rawBaseQty)&&+rawBaseQty>0?+rawBaseQty:1;
-      const soldQty=(isFinite(+rawSold)?+rawSold:0)*baseQty;
+      if(!barcode||rawBaseQty===''){sk++;continue;}
+      const soldQty=isFinite(+rawBaseQty)&&+rawBaseQty>0?+rawBaseQty:0;
       state.r16Data.push({barcode,soldQty,skuR16});
     }
     // Normalize barcode: trim, remove non-printable, normalize spaces

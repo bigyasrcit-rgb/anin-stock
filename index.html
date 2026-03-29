@@ -571,7 +571,7 @@ async function selectBranch(branch){
   updateBranchDisplay();
   state.scanData.clear();state.unknownScans=[];scanListMap.clear();
   state.r01Data=[];state.r05Data=[];
-  state.r16Data=[];state.r16SalesMap.clear();state.r16Loaded=false;
+  state.r16Data=[];state.r16SalesMap.clear();state.r16RawMap.clear();state.r16Loaded=false;
   ['R01','R05','R16'].forEach(k=>{document.getElementById('badge'+k).textContent='ยังไม่โหลด';});
   rebuildMaps();renderScanList();updateStats();renderTable();updateConfirmBtn();
   loadSession();await restoreFromFirestore(true);
@@ -580,7 +580,7 @@ async function selectBranch(branch){
 // ===================== State =====================
 const state = {
   r01Data:[], r05Data:[],
-  r16Data:[], r16SalesMap:new Map(), r16Loaded:false,
+  r16Data:[], r16SalesMap:new Map(), r16RawMap:new Map(), r16Loaded:false,
   skuMap:new Map(), barcodeMap:new Map(), skuDirectMap:new Map(), scanData:new Map(), unknownScans:[],
   currentFilter:'all', pendingAuditSku:null,
 };
@@ -640,7 +640,10 @@ function loadR16(event) {
   const file=event.target.files[0]; if(!file)return;
   if(!state.barcodeMap.size){toast('โหลด R01.102 และ R05.106 ก่อน แล้วค่อยโหลด R16.104','warn');return;}
   parseFile(file,rows=>{
-    state.r16Data=[];state.r16SalesMap.clear();
+    state.r16Data=[];state.r16SalesMap.clear();state.r16RawMap.clear();
+    // Auto-detect TRANDATE column from header row
+    let tranDateColIdx=-1;
+    if(rows.length>0){const hdr=rows[0];for(let c=0;c<hdr.length;c++){if((hdr[c]??'').toString().trim().toUpperCase()==='TRANDATE'){tranDateColIdx=c;break;}}}
     let sk=0,matched=0,mismatch=0,missing=0;
     for(let i=1;i<rows.length;i++){
       const r=rows[i];if(!r||!r.length)continue;
@@ -651,7 +654,8 @@ function loadR16(event) {
       const skuR16=(r[23]??'').toString().trim();    // Col X (index 23)
       if(!barcode||rawBaseQty===''){sk++;continue;}
       const soldQty=isFinite(+rawBaseQty)&&+rawBaseQty>0?+rawBaseQty:0;
-      state.r16Data.push({barcode,soldQty,skuR16});
+      const tranDate=tranDateColIdx>=0?(r[tranDateColIdx]??'').toString().trim():'';
+      state.r16Data.push({barcode,soldQty,skuR16,tranDate});
     }
     // Normalize barcode: trim, remove non-printable, normalize spaces
     function normalizeBarcode(b){ return b.replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/\s+/g,' ').trim(); }
@@ -675,6 +679,8 @@ function loadR16(event) {
       if(!state.skuMap.has(skuFromR05)){missing++;return;}
       // สะสมยอดขายตาม SKU
       state.r16SalesMap.set(skuFromR05,(state.r16SalesMap.get(skuFromR05)||0)+row.soldQty);
+      // เก็บ raw rows พร้อม tranDate สำหรับ TRANDATE-based filtering
+      const rawArr=state.r16RawMap.get(skuFromR05)||[];rawArr.push({soldQty:row.soldQty,tranDate:row.tranDate||''});state.r16RawMap.set(skuFromR05,rawArr);
       matched++;
     });
     // Diagnostic: log sample barcodes from both files if no match
@@ -710,7 +716,7 @@ function reEvaluateAuditItems(){
   for(const[sku,sd] of state.scanData.entries()){
     if(sd.status!=='audit')continue;
     const si=state.skuMap.get(sku);if(!si)continue;
-    const soldQty=state.r16SalesMap.get(sku)||0;
+    const soldQty=getSoldQtyBefore(sku,sd.timestamp);
     const effectiveCnt=sd.countedQty+soldQty;
     if(effectiveCnt===si.systemQty){
       sd.status='pass';sd.auditStatus='approved';
@@ -731,7 +737,7 @@ async function clearAllData() {
   localStorage.removeItem(lsKey());
   if(_db&&currentBranch){const id=getSessionId();try{await Promise.all([_db.collection('stock_sessions').doc(id).delete(),_db.collection('stock_sessions').doc(id+'_master').delete(),_db.collection('stock_sessions').doc(id+'_r01').delete(),_db.collection('stock_sessions').doc(id+'_r05').delete()]);}catch(e){console.warn('Firestore delete:',e.message);}}
   state.scanData.clear();state.unknownScans=[];scanListMap.clear();
-  state.r01Data=[];state.r05Data=[];state.r16Data=[];state.r16SalesMap.clear();state.r16Loaded=false;
+  state.r01Data=[];state.r05Data=[];state.r16Data=[];state.r16SalesMap.clear();state.r16RawMap.clear();state.r16Loaded=false;
   ['R01','R05','R16'].forEach(k=>{document.getElementById('badge'+k).textContent='ยังไม่โหลด';});
   rebuildMaps();invalidatePopupRowsCache();renderScanList();updateConfirmBtn();
   document.getElementById('dbStatus').textContent='Ready';
@@ -900,6 +906,33 @@ function handleBarcode(parsed,immediateRender=true){
   scheduleSave();if(immediateRender){renderScanList();updateStats();renderTable();}
 }
 
+function parseTranDate(str){
+  if(!str)return null;
+  const s=str.trim();
+  // Thai POS format: DD/MM/YYYY or DD/MM/YYYY HH:mm:ss
+  const thMatch=s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}:\d{2}:\d{2}))?/);
+  if(thMatch){
+    const iso=`${thMatch[3]}-${thMatch[2]}-${thMatch[1]}${thMatch[4]?'T'+thMatch[4]:'T23:59:59'}`;
+    const d=new Date(iso);return isNaN(d)?null:d;
+  }
+  // ISO format: YYYY-MM-DD or YYYY-MM-DD HH:mm:ss
+  const d=new Date(s.replace(' ','T'));return isNaN(d)?null:d;
+}
+
+function getSoldQtyBefore(sku,scanTimestamp){
+  // fallback: ถ้าไม่มี r16RawMap หรือไม่มี scanTimestamp → ใช้ r16SalesMap เดิม
+  if(!state.r16RawMap.size||!scanTimestamp)return state.r16SalesMap.get(sku)||0;
+  const rows=state.r16RawMap.get(sku);
+  if(!rows)return 0;
+  const scanDate=new Date(scanTimestamp.replace(' ','T'));
+  return rows.reduce((sum,row)=>{
+    if(!row.tranDate)return sum+row.soldQty; // ไม่มีวันที่ → นับรวม
+    const td=parseTranDate(row.tranDate);
+    if(!td)return sum+row.soldQty; // parse ไม่ได้ → นับรวม
+    return td<=scanDate?sum+row.soldQty:sum; // ขายก่อน/ระหว่าง scan → นับ
+  },0);
+}
+
 function evaluatePendingScans(){
   let any = false;
   for(const[sku, sd] of state.scanData.entries()){
@@ -911,8 +944,8 @@ function evaluatePendingScans(){
     const sys = si.systemQty;
     const cnt = sd.countedQty;
     
-    // หักยอดขายระหว่างนับ (R16.104) ← แก้ตรงนี้
-    const soldQty = state.r16SalesMap.get(sku) || 0;
+    // หักยอดขายระหว่างนับ (R16.104) — filter เฉพาะ TRANDATE ≤ scan timestamp
+    const soldQty = getSoldQtyBefore(sku, sd.timestamp);
     
     // แก้ไขสำคัญ: รวมยอดขายกลับเข้าไปเพื่อเปรียบเทียบกับ System Qty เดิม
     const effectiveCnt = soldQty > 0 

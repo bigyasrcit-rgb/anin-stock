@@ -51,17 +51,46 @@ DOMContentLoaded → showBranchSelector() → selectBranch(branch) → pinModal 
 - Firestore document ID = ชื่อสาขา: `SRC`, `KKL`, `SSS` (ไม่มีวันที่ — ข้อมูลต่อเนื่องข้ามวัน)
 - สลับสาขา → save สาขาเก่าก่อน (await) → clear state → โหลดสาขาใหม่
 
+## ⚠️ ข้อควรระวังในการแก้ไขโค้ด
+
+### 🚨 ห้ามข้อมูลที่สแกนไปแล้วหายเด็ดขาด
+`state.scanData` คือหัวใจของระบบ — เก็บผลการนับทุก SKU ที่พนักงานสแกนไปแล้ว
+
+**ห้ามทำสิ่งเหล่านี้โดยไม่ตั้งใจ:**
+- `state.scanData.clear()` — ลบข้อมูลสแกนทั้งหมด (มีแค่ใน `selectBranch` และ `clearAllData` เท่านั้น)
+- `state.scanData.delete(sku)` — ลบรายการ SKU เดี่ยว (มีแค่ใน `removeScanItem` เท่านั้น)
+- เขียนทับ `state.scanData` ด้วย object ใหม่
+- แก้ `saveSession()` / `loadSession()` โดยไม่ตรวจสอบว่า scanData ยังครบ
+
+**ฟังก์ชันที่แตะ scanData ได้ (ต้องระวัง):**
+```
+handleBarcode()     → เพิ่ม/อัปเดต entry (ปกติ)
+removeScanItem()    → ลบ entry เดี่ยว (ผ่านปุ่ม UI เท่านั้น)
+evaluatePendingScans() → เปลี่ยน status scanning → pass/audit (ปกติ)
+reEvaluateAuditItems() → เปลี่ยน status audit → pass (ปกติ)
+selectBranch()      → clear ทั้งหมด (ตั้งใจ — สลับสาขา)
+clearAllData()      → clear ทั้งหมด (ตั้งใจ — ต้องใส่ PIN)
+loadSession()       → restore จาก localStorage (ตั้งใจ)
+restoreFromFirestore() → restore จาก Firestore (ตั้งใจ)
+```
+
+**ก่อนแก้ไขโค้ดที่เกี่ยวข้องกับ scanData ต้องถามตัวเองว่า:**
+> "ถ้าพนักงานสแกนสินค้าไปแล้ว 2,000 รายการ โค้ดนี้จะทำให้ข้อมูลหายไหม?"
+
+---
+
 ## Key State & Data Flow
 
 ### State Object (`state`)
 ```js
 state.r01Data       // [] — product master (SKU, productName, systemQty)
 state.r05Data       // [] — barcode master (barcode → SKU mapping)
-state.r16SalesMap   // Map<SKU, soldQty> — sales during count period (BASEQUANTITY)
+state.r16SalesMap   // Map<SKU, soldQty> — sales during count period (BASEQUANTITY) — บันทึก localStorage
+state.r16RawMap     // Map<SKU, [{soldQty, tranDate}]> — raw R16 rows for TRANDATE filter — in-memory only
 state.skuMap        // Map<SKU, {productName, systemQty, barcodes[]}>
 state.barcodeMap    // Map<barcode, SKU>
 state.skuDirectMap  // Map<SKU, {barcode, unitName}> — for scanning by SKU
-state.scanData      // Map<SKU, {countedQty, status, timestamp, ...}>
+state.scanData      // Map<SKU, {countedQty, status, timestamp, ...}>  ← ข้อมูลสำคัญที่สุด
 state.unknownScans  // [] — barcodes not found in system
 ```
 
@@ -82,7 +111,7 @@ handleScanKey → processScan → drainQueue → handleBarcode → appendScanRow
 
 ### Confirm Logic (evaluatePendingScans)
 ```
-soldQty = R16 Col R (BASEQUANTITY — จำนวนแปลงเป็นหน่วยเล็กสุดแล้ว)
+soldQty = getSoldQtyBefore(sku, sd.timestamp)  ← กรองด้วย TRANDATE ≤ scan timestamp
 effectiveCnt = countedQty + soldQty
 effectiveCnt === systemQty → pass
 effectiveCnt !== systemQty → audit
@@ -91,6 +120,26 @@ effectiveCnt !== systemQty → audit
 - บวก soldQty กลับเข้าไป (ของที่ขายไประหว่างนับต้องนับรวม)
 - BASEQUANTITY (Col R) คือจำนวนที่แปลงเป็นหน่วยเล็กสุดแล้ว **ใช้โดยตรง ไม่ต้องคูณ QUANTITY**
 - ตัวอย่าง: Alerest 10mg ขาย 5 แผง (10 เม็ด/แผง) → BASEQUANTITY=50, QUANTITY=5 → soldQty=50
+- `sd.timestamp` = เวลาที่สแกน barcode ลง scan-input ครั้งล่าสุดของ SKU นั้น (ไม่ใช่เวลากด Confirm)
+
+### TRANDATE-based Filtering (getSoldQtyBefore)
+```
+R16 มีคอลัมน์ TRANDATE = วันเวลาขายจริงของ POS
+getSoldQtyBefore(sku, scanTimestamp):
+  ถ้า r16RawMap ว่าง หรือไม่มี scanTimestamp → fallback r16SalesMap (ยอดรวมทั้งหมด)
+  ถ้า TRANDATE ≤ scanTimestamp → ขายก่อน/ระหว่างนับ → นับรวม
+  ถ้า TRANDATE > scanTimestamp → ขายหลังนับ → ตัดออก
+```
+- `r16RawMap` เก็บ in-memory only ไม่บันทึก localStorage
+- หลัง F5 โดยไม่โหลด R16 ใหม่ → r16RawMap ว่าง → fallback r16SalesMap อัตโนมัติ
+- R16 ไม่มีคอลัมน์ TRANDATE → tranDate='' → นับรวมทั้งหมด (เดิม)
+
+### Workflow ที่รองรับ (สำคัญ)
+```
+✅ สแกนสินค้าให้ครบทุกชิ้นก่อน → โหลด R16 → กด Confirm
+❌ สแกนบางส่วน → confirm → สแกนต่อ (ไม่รองรับ)
+❌ สแกนครบแล้ว → สแกนซ้ำจากต้น (countedQty บวกสะสม จะผิด)
+```
 
 ### R16 Re-evaluate
 หลังโหลด R16 ใหม่ ระบบจะ re-evaluate item ที่เป็น `audit` อัตโนมัติ
@@ -108,7 +157,9 @@ effectiveCnt !== systemQty → audit
 | `handleBarcode()` | ประมวลผล 1 barcode/SKU |
 | `drainQueue()` | ประมวลผล scan queue แบบ batch |
 | `evaluatePendingScans()` | เปรียบเทียบกับ systemQty → pass/audit |
-| `reEvaluateAuditItems()` | re-evaluate audit items หลังโหลด R16 ใหม่ |
+| `reEvaluateAuditItems()` | re-evaluate audit items หลังโหลด R16 ใหม่ (ใช้ getSoldQtyBefore) |
+| `parseTranDate(str)` | แปลง TRANDATE string → Date (รองรับ DD/MM/YYYY, YYYY-MM-DD) |
+| `getSoldQtyBefore(sku, ts)` | sum soldQty เฉพาะ TRANDATE ≤ ts (fallback r16SalesMap ถ้าไม่มีข้อมูล) |
 | `appendScanRow()` | อัปเดต scanListMap (ไม่ render) |
 | `rebuildScanListMap()` | สร้าง scanListMap จาก scanData (ข้าม pending) |
 | `renderScanList()` | render scan list UI (max 100 rows) |
@@ -147,6 +198,7 @@ effectiveCnt !== systemQty → audit
 ฟิลด์ที่ **ไม่บันทึก** ลง localStorage (ประหยัด space):
 - `scans[]`, `scannedBy`, `auditor`, `retries` ใน scanData
 - `r16Data` (raw rows)
+- `r16RawMap` (TRANDATE raw rows — in-memory only, ต้องโหลด R16 ใหม่หลัง F5)
 
 ## Firestore
 **Collection:** `stock_sessions`
@@ -189,6 +241,7 @@ effectiveCnt !== systemQty → audit
 - **CSV:** ตรวจ UTF-8 BOM → UTF-8 strict → fallback Windows-874 (Thai Excel)
 - **XLSX:** อ่านผ่าน SheetJS `XLSX.read()` แบบ array buffer
 - **R16.104:** Col R = BASEQUANTITY (จำนวนแปลงเป็นหน่วยเล็กสุดแล้ว) → ใช้เป็น soldQty โดยตรง
+- **R16 TRANDATE:** auto-detect จาก header row (ค้นหาชื่อ "TRANDATE") → ใช้กรองยอดขายตาม timestamp
 
 ## Column Layout (scan-list)
 ```

@@ -901,9 +901,9 @@ function parseTranDate(str){
   if(!str)return null;
   const s=str.trim();
   // Thai POS format: DD/MM/YYYY or DD/MM/YYYY HH:mm:ss
-  const thMatch=s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}:\d{2}:\d{2}))?/);
+  const thMatch=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{2}:\d{2}:\d{2}))?/);
   if(thMatch){
-    const iso=`${thMatch[3]}-${thMatch[2]}-${thMatch[1]}${thMatch[4]?'T'+thMatch[4]:'T23:59:59'}`;
+    const iso=`${thMatch[3]}-${thMatch[2].padStart(2,'0')}-${thMatch[1].padStart(2,'0')}${thMatch[4]?'T'+thMatch[4]:'T23:59:59'}`;
     const d=new Date(iso);return isNaN(d)?null:d;
   }
   // ISO format: YYYY-MM-DD or YYYY-MM-DD HH:mm:ss

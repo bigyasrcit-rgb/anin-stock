@@ -108,6 +108,7 @@
     .upload-file-name { font-size:0.7rem; font-weight:600; color:#2c2c2a; line-height:1.3; }
     .upload-file-name-muted { color:#888780; }
     .upload-file-sub { font-size:0.7rem; color:#b4b2a9; margin-top:1px; }
+    .upload-file-ts { font-size:0.62rem; color:#a09e96; margin-top:3px; }
     .upload-file-badge { display:flex; align-items:center; gap:6px; padding:5px 10px; border-radius:999px; font-size:0.7rem; font-weight:600; background:#e1f5ee; color:#0f6e56; flex-shrink:0; }
     .upload-file-badge-optional { background:#f1efe8; color:#888780; }
     .upload-file-badge-dot { width:5px; height:5px; border-radius:50%; background:var(--green); animation:pulseDot 2s infinite; }
@@ -299,7 +300,7 @@
         </div>
         <input type="file" id="fileR16" accept=".csv,.xlsx,.xls" style="display:none" onchange="loadR16(event)">
         <div class="upload-file-item" onclick="var _f=document.getElementById('fileR16');_f.value='';_f.click()">
-          <div class="upload-file-info"><div class="upload-file-icon"><svg viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="9" height="12" rx="1.5" fill="#5DCAA5"/><rect x="4" y="4" width="5" height="1" rx="0.5" fill="white" opacity="0.8"/><rect x="4" y="6" width="5" height="1" rx="0.5" fill="white" opacity="0.8"/><rect x="4" y="8" width="3" height="1" rx="0.5" fill="white" opacity="0.8"/><path d="M9 1l3 3h-3V1z" fill="#1D9E75"/></svg></div><div><div class="upload-file-name">R16.104</div><div class="upload-file-sub">สินค้าที่ขาย</div></div></div>
+          <div class="upload-file-info"><div class="upload-file-icon"><svg viewBox="0 0 16 16" fill="none"><rect x="2" y="1" width="9" height="12" rx="1.5" fill="#5DCAA5"/><rect x="4" y="4" width="5" height="1" rx="0.5" fill="white" opacity="0.8"/><rect x="4" y="6" width="5" height="1" rx="0.5" fill="white" opacity="0.8"/><rect x="4" y="8" width="3" height="1" rx="0.5" fill="white" opacity="0.8"/><path d="M9 1l3 3h-3V1z" fill="#1D9E75"/></svg></div><div><div class="upload-file-name">R16.104</div><div class="upload-file-sub">สินค้าที่ขาย</div><div id="r16Timestamp" class="upload-file-ts" style="display:none"></div></div></div>
           <div class="upload-file-badge"><div class="upload-file-badge-dot"></div><span id="badgeR16">ยังไม่โหลด</span></div>
         </div>
       </div>
@@ -563,6 +564,7 @@ async function selectBranch(branch){
   state.r01Data=[];state.r05Data=[];
   state.r16Data=[];state.r16SalesMap.clear();state.r16RawMap.clear();state.r16Loaded=false;
   ['R01','R05','R16'].forEach(k=>{document.getElementById('badge'+k).textContent='ยังไม่โหลด';});
+  _setR16Ts('');
   rebuildMaps();renderScanList();updateStats();renderTable();updateConfirmBtn();
   loadSession();await restoreFromFirestore(true);
 }
@@ -570,7 +572,7 @@ async function selectBranch(branch){
 // ===================== State =====================
 const state = {
   r01Data:[], r05Data:[],
-  r16Data:[], r16SalesMap:new Map(), r16RawMap:new Map(), r16Loaded:false,
+  r16Data:[], r16SalesMap:new Map(), r16RawMap:new Map(), r16Loaded:false, r16UploadedAt:'',
   skuMap:new Map(), barcodeMap:new Map(), skuDirectMap:new Map(), scanData:new Map(), unknownScans:[],
   currentFilter:'all',
 };
@@ -684,6 +686,8 @@ function loadR16(event) {
     }
     state.r16Loaded=true;
     document.getElementById('badgeR16').textContent='Ready';
+    const _now=new Date();
+    _setR16Ts(`${String(_now.getHours()).padStart(2,'0')}:${String(_now.getMinutes()).padStart(2,'0')} น. ${String(_now.getDate()).padStart(2,'0')}/${String(_now.getMonth()+1).padStart(2,'0')}/${_now.getFullYear()}`);
     updateConfirmBtn();
     const totalSold=[...state.r16SalesMap.values()].reduce((a,b)=>a+b,0);
     let msg=`R16.104: match ${matched} SKU / หัก ${totalSold} ชิ้น`;
@@ -730,6 +734,7 @@ async function clearAllData() {
   state.scanData.clear();state.unknownScans=[];scanListMap.clear();
   state.r01Data=[];state.r05Data=[];state.r16Data=[];state.r16SalesMap.clear();state.r16RawMap.clear();state.r16Loaded=false;
   ['R01','R05','R16'].forEach(k=>{document.getElementById('badge'+k).textContent='ยังไม่โหลด';});
+  _setR16Ts('');
   rebuildMaps();invalidatePopupRowsCache();renderScanList();updateConfirmBtn();
   document.getElementById('dbStatus').textContent='Ready';
   toast('ล้างข้อมูลทั้งหมดเรียบร้อย','info');
@@ -745,7 +750,7 @@ function saveSession() {
     }
     const slObj={};for(const[k,v]of scanListMap.entries())slObj[k]=v;
     const r16Obj={};for(const[k,v]of state.r16SalesMap.entries())r16Obj[k]=v;
-    localStorage.setItem(lsKey(),JSON.stringify({r01Data:state.r01Data,r05Data:state.r05Data,r16SalesMap:r16Obj,r16Loaded:state.r16Loaded,scanData:sdObj,unknownScans:state.unknownScans,scanListMap:slObj}));
+    localStorage.setItem(lsKey(),JSON.stringify({r01Data:state.r01Data,r05Data:state.r05Data,r16SalesMap:r16Obj,r16Loaded:state.r16Loaded,r16UploadedAt:state.r16UploadedAt,scanData:sdObj,unknownScans:state.unknownScans,scanListMap:slObj}));
   } catch(e){toast('แบ็คอัพล้มเหลว','warn');}
   if(!_adminMode){
     clearTimeout(_firestoreSyncTimer);
@@ -760,6 +765,7 @@ function loadSession() {
     if(s.r01Data?.length){state.r01Data=s.r01Data;document.getElementById('badgeR01').textContent='Ready';}
     if(s.r05Data?.length){state.r05Data=s.r05Data;document.getElementById('badgeR05').textContent='Ready';}
     if(s.r16Loaded){state.r16Loaded=true;document.getElementById('badgeR16').textContent='Ready';}
+    if(s.r16UploadedAt)_setR16Ts(s.r16UploadedAt);
     if(s.r16SalesMap){state.r16SalesMap.clear();for(const k in s.r16SalesMap)state.r16SalesMap.set(k,s.r16SalesMap[k]);}
     if(state.r01Data.length&&state.r05Data.length)rebuildMaps();
     if(s.scanData){state.scanData.clear();for(const k in s.scanData)state.scanData.set(k,{scannedBy:'',auditor:'',retries:0,scans:[],...s.scanData[k]});}
@@ -809,6 +815,14 @@ function parseScanLine(line){
   if(p.length>=3)return{location:p[0],barcode:p[1],qty:parseFloat(p[2])||0};
   if(p.length===2){const n=parseFloat(p[1]);return!isNaN(n)&&p[1]!==''?{location:'',barcode:p[0],qty:n}:{location:p[0],barcode:p[1],qty:null};}
   return{location:'',barcode:p[0],qty:null};
+}
+
+function _setR16Ts(tsStr){
+  state.r16UploadedAt=tsStr||'';
+  const el=document.getElementById('r16Timestamp');
+  if(!el)return;
+  if(tsStr){el.textContent=tsStr;el.style.display='';}
+  else{el.textContent='';el.style.display='none';}
 }
 
 function updateConfirmBtn(){
@@ -1227,6 +1241,7 @@ function restoreSession(event){
       if(s.r01Data?.length){state.r01Data=s.r01Data;document.getElementById('badgeR01').textContent='Ready';}
       if(s.r05Data?.length){state.r05Data=s.r05Data;document.getElementById('badgeR05').textContent='Ready';}
       if(s.r16Loaded){state.r16Loaded=true;document.getElementById('badgeR16').textContent='Ready';}
+      if(s.r16UploadedAt)_setR16Ts(s.r16UploadedAt);
       if(s.r16SalesMap){state.r16SalesMap.clear();for(const k in s.r16SalesMap)state.r16SalesMap.set(k,s.r16SalesMap[k]);}
       if(state.r01Data.length&&state.r05Data.length)rebuildMaps();
       if(s.scanData){state.scanData.clear();for(const k in s.scanData)state.scanData.set(k,{scannedBy:'',auditor:'',retries:0,scans:[],...s.scanData[k]});}
@@ -1282,7 +1297,7 @@ async function syncToFirestore(){
   const sdObj={};for(const[k,v]of state.scanData.entries()){const{scannedBy,auditor,retries,scans,...keep}=v;sdObj[k]=keep;}
   const slObj={};for(const[k,v]of scanListMap.entries())slObj[k]=v;
   const r16Obj={};for(const[k,v]of state.r16SalesMap.entries())r16Obj[k]=v;
-  const data={r16SalesMap:r16Obj,r16Loaded:state.r16Loaded,scanData:sdObj,unknownScans:state.unknownScans,scanListMap:slObj};
+  const data={r16SalesMap:r16Obj,r16Loaded:state.r16Loaded,r16UploadedAt:state.r16UploadedAt,scanData:sdObj,unknownScans:state.unknownScans,scanListMap:slObj};
   try{
     await _db.collection('stock_sessions').doc(getSessionId()).set({session_data_json:JSON.stringify(data),updated_at:firebase.firestore.FieldValue.serverTimestamp()});
     document.getElementById('dbStatus').textContent='Synced';
@@ -1309,6 +1324,7 @@ async function restoreFromFirestore(force=false){
     const s=raw.session_data_json?JSON.parse(raw.session_data_json):raw.session_data;
     if(!s){document.getElementById('dbStatus').textContent='Ready';return;}
     if(s.r16Loaded){state.r16Loaded=true;document.getElementById('badgeR16').textContent='Ready';}
+    if(s.r16UploadedAt)_setR16Ts(s.r16UploadedAt);
     if(s.r16SalesMap){state.r16SalesMap.clear();for(const k in s.r16SalesMap)state.r16SalesMap.set(k,s.r16SalesMap[k]);}
     if(s.scanData){state.scanData.clear();for(const k in s.scanData)state.scanData.set(k,{scannedBy:'',auditor:'',retries:0,scans:[],...s.scanData[k]});}
     if(s.unknownScans)state.unknownScans=s.unknownScans;
